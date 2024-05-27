@@ -76,7 +76,7 @@ def cprint(*argv):
     sys.stdout.write(cc.ENDC)
 
 def wstr():
-    return "WORK" if work else "RESTING"
+    return "WORK" if work else "REST"
 
 def cls():
     os.system('cls' if os.name=='nt' else 'clear')
@@ -85,7 +85,7 @@ def cls():
 def timetostr(time, secs=True):
     hours, rem = divmod(time, 3600)
     minutes, seconds = divmod(rem, 60)
-    return f"{int(hours):0>2}:{int(minutes):0>2}{f':{seconds:05.2f}' if secs else ''}"
+    return f"{int(hours):0>2}:{int(minutes):0>2}{f':{seconds:02.0f}' if secs else ''}"
 
 import re
 strip_ANSI_pat = re.compile(r"""
@@ -102,9 +102,20 @@ def exit_handler():
     if os.name == 'nt':
         import win32gui
         import win32con
+        import win32api
         hwnd = win32gui.GetForegroundWindow()
         (left, top, right, bottom) = win32gui.GetWindowRect(hwnd)
         win32gui.SetWindowPos(hwnd,win32con.HWND_NOTOPMOST, left, top, right-left, bottom-top,0)
+        
+        lStyle = win32api.GetWindowLong(hwnd, win32con.GWL_STYLE);
+        lStyle |= (win32con.WS_CAPTION | win32con.WS_THICKFRAME | win32con.WS_MINIMIZEBOX | win32con.WS_MAXIMIZEBOX | win32con.WS_SYSMENU);
+        win32api.SetWindowLong(hwnd, win32con.GWL_STYLE, lStyle);
+
+def toggle_titlebar():
+    lStyle = win32api.GetWindowLong(hwnd, win32con.GWL_STYLE);
+    lStyle ^= (win32con.WS_CAPTION | win32con.WS_THICKFRAME | win32con.WS_MINIMIZEBOX | win32con.WS_MAXIMIZEBOX | win32con.WS_SYSMENU);
+    win32api.SetWindowLong(hwnd, win32con.GWL_STYLE, lStyle);
+    return bool(lStyle & win32con.WS_CAPTION)
 
 always_on_top = True
 
@@ -117,7 +128,7 @@ def toggle_always_on_top():
         hwnd = win32gui.GetForegroundWindow()
         (left, top, right, bottom) = win32gui.GetWindowRect(hwnd)
         win32gui.SetWindowPos(hwnd,win32con.HWND_TOPMOST if always_on_top else win32con.HWND_NOTOPMOST, left, top, right-left, bottom-top,0)
-    
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -139,11 +150,18 @@ if __name__ == '__main__':
         #os.system("color f5")
         
         import win32gui
+        import win32api
         import win32con
-
+        # screen_w, screen_h = win32api.GetSystemMetrics(win32con.SM_CXVIRTUALSCREEN), win32api.GetSystemMetrics(win32con.SM_CYVIRTUALSCREEN)
+        # print(screen_w, screen_h)
         hwnd = win32gui.GetForegroundWindow()
         (left, top, right, bottom) = win32gui.GetWindowRect(hwnd)
-        win32gui.SetWindowPos(hwnd,win32con.HWND_TOPMOST, left, top, 600, 600,0)
+        win32gui.SetWindowPos(hwnd,win32con.HWND_TOPMOST, left, top, 360, 170,0)
+        
+        lStyle = win32api.GetWindowLong(hwnd, win32con.GWL_STYLE);
+        lStyle &= ~(win32con.WS_CAPTION | win32con.WS_THICKFRAME | win32con.WS_MINIMIZEBOX | win32con.WS_MAXIMIZEBOX | win32con.WS_SYSMENU);
+        win32api.SetWindowLong(hwnd, win32con.GWL_STYLE, lStyle);
+
     cls()
     
 
@@ -157,7 +175,7 @@ if __name__ == '__main__':
     working_sum = 0
 
     elapsed_time = 0
-    exceeded = False
+    exceeded = 0
     wexceed_time = args.work_minutes * 60
     rexceed_time = args.rest_minutes * 60
     
@@ -190,40 +208,57 @@ if __name__ == '__main__':
         if not paused:
             now = time.time()
             
-        cprint(f'\rNOW {cc.WORK if work else cc.REST}{wstr()}{cc.ENDC} : {cc.PURPLE}{timetostr(elapsed_time)} {(cc.BGGRAY+"✔") * exceeded}')
+        cprint(f'\r{cc.WORK if work else cc.REST}{wstr()}{cc.ENDC} {cc.PURPLE}{timetostr(elapsed_time)} {(cc.BGGRAY+"✔") * exceeded}')
         sys.stdout.flush()
         
-        if not exceeded and ((work and elapsed_time >= wexceed_time) or (not work and elapsed_time >= rexceed_time)):
+        if ((work and elapsed_time >= wexceed_time * (exceeded + 1)) or (not work and elapsed_time >= rexceed_time * (exceeded + 1))):
             shion_sound.play()
-            exceeded = True
+            exceeded += 1
             
         if msvcrt.kbhit():
             key = msvcrt.getch()
             
             while True:
                 if key == b'\r' or args.auto and exceeded:
+                    if work: working_sum += elapsed_time
                     work = not work
-                    working_sum += elapsed_time
                     
                     elapsed_time = 0
-                    exceeded = False
+                    exceeded = 0
                     
                     cprint(f"Switching to {wstr()}\n")
                     set_status()
                     print(asciiwork if work else asciirest)
                 
-                if key == b'd':
-                    set_status(cc.YELLOW +"Give Random Dice Number 0-9")
+                key_str = key.decode("utf-8")
+                is_key_num = key_str.isnumeric()
                 
-                if prev_key == b'd' and key.decode("utf-8").isnumeric():
-                    num = int(key.decode("utf-8"))
+                if key == b'd':
+                    set_status(cc.YELLOW +"Dice Number (0-9)")
+                
+                if prev_key == b'd' and is_key_num:
+                    num = int(key_str)
                     if num == 0: num = 10
+                    if num == 1: num = 11
                     set_status(f"D{num} = {random.randint(1, num)}", 15)
                 elif prev_key == b'd' and key != b'd':
                     set_status()
                 
+                if key == b'-':
+                    set_status(cc.YELLOW +"Subtract Minutes (0-9)")
+                
+                if prev_key == b'-' and is_key_num:
+                    num = int(key_str)
+                    if num == 0: num = 10
+                    set_status(f"Subtracted {num}", 5)
+                    elapsed_time -= num * 60
+                    elapsed_time = max(elapsed_time, 0)
+                elif prev_key == b'-' and key != b'-':
+                    set_status()
+                
                 if key == b's':
                     set_status(cc.YELLOW + "Set time for (w)ork or (r)rest")
+                    # TODO
                 
                 if prev_key == b's':
                     if key == b'w':
@@ -243,16 +278,26 @@ if __name__ == '__main__':
                         
                 if key == b'r':
                     elapsed_time = 0
-                    exceeded = False
+                    exceeded = 0
                     set_status(cc.RED + "RESET", 5.0)
                 
                 if key == b't':
                     toggle_always_on_top()
-                    set_status(cc.BLUE + f"Always On Top Toggled ({always_on_top})", 5.0)
+                    set_status(cc.BLUE + f'Always On Top ({"ON" if always_on_top else "OFF"})', 5.0)
+                
+                if key == b'm':
+                    is_title_on = toggle_titlebar()
+                    set_status(cc.BLUE + f'Title Bar ({"ON" if is_title_on else "OFF"})', 5.0)
        
                 if key == b'?':
                     set_status(f"work {args.work_minutes} rest {args.rest_minutes}", 5.0)
                 
+                if key == b'.':
+                    set_status(f"Worked for {timetostr(working_sum + (elapsed_time if work else 0))}", 5.0)
+                
+                if key == b'x':
+                    cls()
+                    print(asciiwork if work else asciirest)
 
                 if key == b'q':
                     done = True
