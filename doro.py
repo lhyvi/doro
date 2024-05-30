@@ -6,6 +6,8 @@ import random
 import sys
 import time
 import threading
+import sqlite3
+
 from playsound import playsound
 
 class cc: # cc as in console colors
@@ -34,17 +36,82 @@ class cc: # cc as in console colors
     WORK = f'{IINA}{BOLD}{INVERSE}'
     REST = f'{IINA}{BOLD}'
 
-class SoundPlayer(threading.Thread):
-    def __init__(self, sound_path):
-        self._sound_path = sound_path
-    def play(self, sound_path=None):
-        if sound_path is None:
-            sound_path = self._sound_path
-        threading.Thread(target=playsound, args=[sound_path]).start()
-    
+script_dir = os.path.dirname(os.path.abspath(__file__))
+SHIONLAUGH = os.path.join(script_dir, 'Shion Laugh.wav')
 
+class TimeSaver:
+    def __init__(self):
+        self.con = sqlite3.connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'worktime.db'))
+        cur = self.con.cursor()
+        res = cur.execute("SELECT name FROM sqlite_master WHERE name='worktime'")
+        if res.fetchone() is None:
+            cur.execute("CREATE TABLE worktime (date_ended, time_elapsed)")
     
-SHIONLAUGH = "C:/CS/Shion Laugh.wav"
+    def save_time(self, time_elapsed):
+        if time_elapsed <= 60:
+            return
+        cur = self.con.cursor()
+        cur.execute("INSERT INTO worktime (date_ended, time_elapsed) VALUES(?, ?)", (time.time(), time_elapsed))
+        self.con.commit()
+
+class TimeMeasurer:
+    def __init__(self, work_minutes, rest_minutes):
+        self.past = time.time()
+        self.now = time.time()
+        self.delta = 0
+        
+        self.paused = False
+        
+        self.working_sum = 0
+
+        self.elapsed_time = 0
+        self.exceeded = 0
+        self.wexceed_time = work_minutes * 60
+        self.rexceed_time = rest_minutes * 60
+        
+        self.time_saver = TimeSaver()
+
+    def get_delta(self):
+        if not self.paused:
+            self.now = time.time()
+        self.delta = self.now - self.past
+        self.past = self.now
+        return self.delta
+    
+    def is_exceed(self, work):
+        if (work and self.elapsed_time >= self.wexceed_time * (self.exceeded + 1)) or (not work and self.elapsed_time >= self.rexceed_time * (self.exceeded + 1)):
+            self.exceeded += 1
+            return True
+        return False
+    
+    def pause(self):
+        self.paused = True
+        
+    def unpause(self):
+        self.paused = False
+        self.past = time.time()
+        self.now = time.time()
+    
+    def update_elapsed_time(self):
+        self.elapsed_time += self.get_delta()
+    
+    def end(self, work):
+        if work:
+            self.working_sum += self.elapsed_time
+            self.time_saver.save_time(self.working_sum)
+        self.elapsed_time = 0
+        self.exceeded = 0
+    
+    def reset(self):
+        self.elapsed_time = 0
+        self.exceeded = 0
+    
+    def subtract(self, minutes):
+        self.elapsed_time -= minutes * 60
+        self.elapsed_time = max(self.elapsed_time, 0)
+    
+    def add(self, minutes):
+        self.elapsed_time += minutes * 60
 
 # ascii from https://patorjk.com/software/taag/
 
@@ -147,7 +214,6 @@ if __name__ == '__main__':
     if os.name == 'nt':
         atexit.register(exit_handler)
         os.system("title DORO TIME")
-        #os.system("color f5")
         
         import win32gui
         import win32api
@@ -166,26 +232,14 @@ if __name__ == '__main__':
     
 
     done = False
-
-    past = time.time()
-    now = time.time()
-    work = True
-    paused = False
-    
-    working_sum = 0
-
-    elapsed_time = 0
-    exceeded = 0
-    wexceed_time = args.work_minutes * 60
-    rexceed_time = args.rest_minutes * 60
-    
+    work = True    
     
     status_str = None
     status_time = 0
     
     prev_key = None
     
-    shion_sound = SoundPlayer(SHIONLAUGH)
+    tm = TimeMeasurer(args.work_minutes, args.rest_minutes)
     
 
     def set_status(new_status="", time=float('inf')):
@@ -200,39 +254,34 @@ if __name__ == '__main__':
     
     print(asciiwork if work else asciirest)
     while not done:
-        time.sleep(1/10)
-        delta = now - past
-        elapsed_time += delta
-        past = now
+        time.sleep(1/24)
+        tm.update_elapsed_time()
         
-        if not paused:
-            now = time.time()
-            
-        cprint(f'\r{cc.WORK if work else cc.REST}{wstr()}{cc.ENDC} {cc.PURPLE}{timetostr(elapsed_time)} {(cc.BGGRAY+"✔") * exceeded}')
+                    
+        cprint(f'\r{cc.WORK if work else cc.REST}{wstr()}{cc.ENDC} {cc.PURPLE}{timetostr(tm.elapsed_time)} {(cc.BGGRAY+f"✔{tm.exceeded}") if tm.exceeded else ""}')
         sys.stdout.flush()
         
-        if ((work and elapsed_time >= wexceed_time * (exceeded + 1)) or (not work and elapsed_time >= rexceed_time * (exceeded + 1))):
-            shion_sound.play()
-            exceeded += 1
+        if tm.is_exceed(work):
+            playsound(SHIONLAUGH, False)
             
-        if msvcrt.kbhit():
+        while msvcrt.kbhit():
             key = msvcrt.getch()
             
             while True:
                 if key == b'\r' or args.auto and exceeded:
-                    if work: working_sum += elapsed_time
+                    tm.end(work)
                     work = not work
-                    
-                    elapsed_time = 0
-                    exceeded = 0
                     
                     cprint(f"Switching to {wstr()}\n")
                     set_status()
                     print(asciiwork if work else asciirest)
-                
-                key_str = key.decode("utf-8")
+                try:
+                    key_str = key.decode("utf-8")
+                except:
+                    key_str = ""
                 is_key_num = key_str.isnumeric()
                 
+                # TODO turn key prev_key pattern into something else
                 if key == b'd':
                     set_status(cc.YELLOW +"Dice Number (0-9)")
                 
@@ -251,10 +300,21 @@ if __name__ == '__main__':
                     num = int(key_str)
                     if num == 0: num = 10
                     set_status(f"Subtracted {num}", 5)
-                    elapsed_time -= num * 60
-                    elapsed_time = max(elapsed_time, 0)
+                    tm.subtract(num)
                 elif prev_key == b'-' and key != b'-':
                     set_status()
+                
+                if key == b'+':
+                    set_status(cc.YELLOW +"Add Minutes (0-9)")
+                
+                if prev_key == b'+' and is_key_num:
+                    num = int(key_str)
+                    if num == 0: num = 10
+                    set_status(f"Added {num}", 5)
+                    tm.add(num)
+                elif prev_key == b'+' and key != b'+':
+                    set_status()
+
                 
                 if key == b's':
                     set_status(cc.YELLOW + "Set time for (w)ork or (r)rest")
@@ -267,18 +327,15 @@ if __name__ == '__main__':
                         set_status()
                 
                 if key == b'p':
-                    paused = not paused
-                    if paused:
-                        set_status(cc.BGGRAY + cc.BLUE + "Paused")
-                    else:
+                    if tm.paused:
+                        tm.unpause()
                         set_status()
-                    if not paused:
-                        now = time.time()
-                        past = now
+                    else:
+                        tm.pause()
+                        set_status(cc.BGGRAY + cc.BLUE + "Paused")
                         
                 if key == b'r':
-                    elapsed_time = 0
-                    exceeded = 0
+                    tm.reset()
                     set_status(cc.RED + "RESET", 5.0)
                 
                 if key == b't':
@@ -293,7 +350,7 @@ if __name__ == '__main__':
                     set_status(f"work {args.work_minutes} rest {args.rest_minutes}", 5.0)
                 
                 if key == b'.':
-                    set_status(f"Worked for {timetostr(working_sum + (elapsed_time if work else 0))}", 5.0)
+                    set_status(f"Worked for {timetostr(tm.working_sum + (tm.elapsed_time if work else 0))}", 5.0)
                 
                 if key == b'x':
                     cls()
@@ -301,17 +358,16 @@ if __name__ == '__main__':
 
                 if key == b'q':
                     done = True
-                    if work:
-                        working_sum += elapsed_time
+                    tm.end(work)
                 
                 prev_key = key
                 break
     
         if status_str and status_time > 0:
-            status_time -= delta
+            status_time -= tm.delta
             if status_time > 0:
                 cprint(status_str)
             else:
                 cprint(' ' * len(strip_ANSI(status_str)))
         
-    print(f"\n\nWorked for {timetostr(working_sum)}")
+    print(f"\n\nWorked for {timetostr(tm.working_sum)}")
